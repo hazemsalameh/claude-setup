@@ -13,6 +13,26 @@ warn() { echo "[claude-setup] WARNING: $*" >&2; }
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# ── 0. Install Node.js, Bun, and Claude Code if missing ──────────────────────
+if ! command -v node &>/dev/null; then
+    log "Installing Node.js via nvm..."
+    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+    export NVM_DIR="$HOME/.nvm"
+    source "$NVM_DIR/nvm.sh"
+    nvm install --lts --silent
+fi
+
+if ! command -v bun &>/dev/null; then
+    log "Installing Bun..."
+    curl -fsSL https://bun.sh/install | bash
+    export PATH="$HOME/.bun/bin:$PATH"
+fi
+
+if ! command -v claude &>/dev/null && ! ls "$HOME/.local/share/claude/versions/"* &>/dev/null 2>&1; then
+    log "Installing Claude Code..."
+    npm install -g @anthropic-ai/claude-code --silent
+fi
+
 # ── 1. Copy wrapper scripts ───────────────────────────────────────────────────
 log "Installing wrapper scripts to ~/.local/bin/"
 mkdir -p "$HOME/.local/bin"
