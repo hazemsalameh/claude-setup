@@ -33,7 +33,29 @@ if ! command -v claude &>/dev/null && ! ls "$HOME/.local/share/claude/versions/"
     npm install -g @anthropic-ai/claude-code --silent
 fi
 
-# ── 1. Copy wrapper scripts ───────────────────────────────────────────────────
+# ── 1. Install plugins ───────────────────────────────────────────────────────
+log "Installing Claude Code plugins..."
+mkdir -p "$HOME/.claude/plugins/marketplaces"
+declare -A PLUGINS=(
+    ["thedotmack"]="https://github.com/thedotmack/claude-mem"
+    ["context-mode"]="https://github.com/mksglu/context-mode"
+    ["ui-ux-pro-max-skill"]="https://github.com/nextlevelbuilder/ui-ux-pro-max-skill"
+)
+for name in "${!PLUGINS[@]}"; do
+    url="${PLUGINS[$name]}"
+    dest="$HOME/.claude/plugins/marketplaces/$name"
+    if [[ ! -d "$dest" ]]; then
+        log "  Cloning plugin: $name"
+        git clone --quiet "$url" "$dest" 2>/dev/null || log "  ✗ Failed to clone $name"
+    fi
+    # Run bun install if package.json exists and node_modules is missing
+    if [[ -f "$dest/package.json" && ! -d "$dest/node_modules" ]]; then
+        log "  Installing dependencies: $name"
+        (cd "$dest" && bun install --silent 2>/dev/null) || true
+    fi
+done
+
+# ── 2. Copy wrapper scripts ───────────────────────────────────────────────────
 log "Installing wrapper scripts to ~/.local/bin/"
 mkdir -p "$HOME/.local/bin"
 cp "$REPO_DIR/bin/claude-smart"   "$HOME/.local/bin/claude-smart"
