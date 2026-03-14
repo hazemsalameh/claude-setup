@@ -101,7 +101,37 @@ else
     log "Skipping gdocs-api setup (~/gdocs-api not found)"
 fi
 
-# ── 5. Ensure claude-fallback config dir exists ───────────────────────────────
+# ── 5. Install commands (slash commands) ─────────────────────────────────────
+log "Installing commands to ~/.claude/commands/"
+mkdir -p "$HOME/.claude/commands"
+cp "$REPO_DIR"/commands/*.md "$HOME/.claude/commands/" 2>/dev/null && log "  Commands installed" || log "  No commands found"
+
+# ── 6. Install custom skills ──────────────────────────────────────────────────
+log "Installing custom skills to ~/.claude/skills/"
+mkdir -p "$HOME/.claude/skills"
+for skill_dir in "$REPO_DIR/skills/custom"/*/; do
+    skill_name=$(basename "$skill_dir")
+    if [[ ! -d "$HOME/.claude/skills/$skill_name" ]]; then
+        cp -r "$skill_dir" "$HOME/.claude/skills/$skill_name"
+        log "  Installed custom skill: $skill_name"
+    fi
+done
+
+# ── 7. Clone third-party skill repos ─────────────────────────────────────────
+if command -v git &>/dev/null && [[ -f "$REPO_DIR/skills/sources.txt" ]]; then
+    log "Cloning third-party skills (skipping already installed)..."
+    while IFS= read -r line; do
+        [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+        url="$line"
+        skill_name=$(basename "$url" .git)
+        if [[ ! -d "$HOME/.claude/skills/$skill_name" ]]; then
+            log "  Cloning $skill_name..."
+            git clone --quiet "$url" "$HOME/.claude/skills/$skill_name" 2>/dev/null && log "  ✓ $skill_name" || log "  ✗ $skill_name (failed — skipping)"
+        fi
+    done < "$REPO_DIR/skills/sources.txt"
+fi
+
+# ── 9. Ensure claude-fallback config dir exists ───────────────────────────────
 mkdir -p "$HOME/.config/claude-fallback"
 if [[ ! -f "$HOME/.config/claude-fallback/api_key" ]]; then
     log ""

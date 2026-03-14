@@ -1,0 +1,19 @@
+# Third-party skill repos — cloned by install.sh into ~/.claude/skills/
+# Format: github_url [directory_name]
+https://github.com/jawwadfirdousi/agent-skills
+https://github.com/avifenesh/agentsys
+https://github.com/avifenesh/agnix
+https://github.com/akin-ozer/cc-devops-skills
+https://github.com/undeadlist/claude-code-agents
+https://github.com/fcakyon/claude-codex-settings
+https://github.com/dreamiurg/claude-mountaineering-skills
+https://github.com/K-Dense-AI/claude-scientific-skills
+https://github.com/robertguss/claude-skills
+https://github.com/EveryInc/compound-engineering-plugin
+https://github.com/NeoLabHQ/context-engineering-kit
+https://github.com/affaan-m/everything-claude-code
+https://github.com/skills-directory/skill-codex
+https://github.com/trailofbits/skills
+https://github.com/obra/superpowers
+https://github.com/glittercowboy/taches-cc-resources
+https://github.com/alonw0/web-asset-generator
