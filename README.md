@@ -108,7 +108,7 @@ chmod 600 ~/.config/claude-fallback/api_key
 
 ```bash
 cd ~
-git clone https://github.com/YOUR_USERNAME/claude-setup.git
+git clone https://github.com/hazemsalameh/claude-setup.git
 cd claude-setup
 bash install.sh
 source ~/.bashrc
