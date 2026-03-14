@@ -27,7 +27,7 @@ git clone https://github.com/hazemsalameh/claude-setup.git && cd claude-setup &&
 
 ## Prerequisites
 
-**Windows 11 + WSL2 (Ubuntu)** or native **Ubuntu 22.04+**
+**Windows 10 or 11 + WSL2 (Ubuntu)** or native **Ubuntu 22.04+**
 
 ```bash
 # 1. Install git, python3
