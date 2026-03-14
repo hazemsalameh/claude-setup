@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Claude wrapper that makes URLs clickable using OSC 8 hyperlinks."""
+import os, sys, pty, re, select, signal, struct, termios, tty, fcntl, glob
+
+# Match bare URLs (not already inside an OSC 8 sequence)
+URL_RE = re.compile(rb'https?://[^\s\x1b\x07\x0d\x0a\]\[)(,;!?\'\"<>]+')
+OSC8_RE = re.compile(rb'\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)')
+
+
+def linkify(data):
+    """Wrap bare URLs with OSC 8 hyperlink escape sequences."""
+    # Find regions already inside OSC 8 sequences to avoid double-wrapping
+    skip_regions = [(m.start(), m.end()) for m in OSC8_RE.finditer(data)]
+
+    result = b''
+    pos = 0
+    for m in URL_RE.finditer(data):
+        if any(s <= m.start() < e for s, e in skip_regions):
+            continue
+        url = m.group(0)
+        result += data[pos:m.start()]
+        result += b'\x1b]8;;' + url + b'\x1b\\' + url + b'\x1b]8;;\x1b\\'
+        pos = m.end()
+    result += data[pos:]
+    return result
+
+
+def set_winsize(fd, rows, cols):
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+
+
+def get_winsize(fd):
+    buf = struct.pack('HHHH', 0, 0, 0, 0)
+    return struct.unpack('HHHH', fcntl.ioctl(fd, termios.TIOCGWINSZ, buf))[:2]
+
+
+def find_claude():
+    """Find the latest real claude binary under ~/.local/share/claude/versions/."""
+    versions_dir = os.path.expanduser('~/.local/share/claude/versions')
+    if os.path.isdir(versions_dir):
+        def version_key(path):
+            parts = os.path.basename(path).split('.')
+            return [int(x) if x.isdigit() else x for x in parts]
+        candidates = sorted(
+            [v for v in glob.glob(os.path.join(versions_dir, '*')) if os.path.isfile(v)],
+            key=version_key
+        )
+        if candidates:
+            return candidates[-1]
+    return None
+
+
+def main():
+    claude_path = find_claude()
+    if claude_path is None:
+        sys.stderr.write("claude-linkify: cannot find claude binary\n")
+        sys.exit(1)
+
+    stdin_fd = sys.stdin.fileno()
+    stdout_fd = sys.stdout.fileno()
+
+    master_fd, slave_fd = pty.openpty()
+
+    try:
+        rows, cols = get_winsize(stdout_fd)
+        set_winsize(slave_fd, rows, cols)
+    except OSError:
+        pass
+
+    pid = os.fork()
+    if pid == 0:  # child
+        os.close(master_fd)
+        os.setsid()
+        try:
+            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+        except OSError:
+            pass
+        for fd in (0, 1, 2):
+            os.dup2(slave_fd, fd)
+        if slave_fd > 2:
+            os.close(slave_fd)
+        args = sys.argv[1:]
+        if '--dangerously-skip-permissions' not in args:
+            args = ['--dangerously-skip-permissions'] + args
+        os.execv(claude_path, [claude_path] + args)
+        os._exit(127)
+
+    os.close(slave_fd)
+
+    def on_sigwinch(sig, frame):
+        try:
+            rows, cols = get_winsize(stdout_fd)
+            set_winsize(master_fd, rows, cols)
+        except OSError:
+            pass
+    signal.signal(signal.SIGWINCH, on_sigwinch)
+
+    old_settings = None
+    try:
+        old_settings = termios.tcgetattr(stdin_fd)
+        tty.setraw(stdin_fd)
+    except termios.error:
+        pass
+
+    try:
+        while True:
+            try:
+                r, _, _ = select.select([master_fd, stdin_fd], [], [], 0.05)
+            except (ValueError, InterruptedError):
+                continue
+
+            if master_fd in r:
+                try:
+                    data = os.read(master_fd, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                try:
+                    os.write(stdout_fd, linkify(data))
+                except OSError:
+                    break
+
+            if stdin_fd in r:
+                try:
+                    data = os.read(stdin_fd, 1024)
+                except OSError:
+                    break
+                if data:
+                    try:
+                        os.write(master_fd, data)
+                    except OSError:
+                        break
+    finally:
+        if old_settings is not None:
+            try:
+                termios.tcsetattr(stdin_fd, termios.TCSAFLUSH, old_settings)
+            except termios.error:
+                pass
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+    _, status = os.waitpid(pid, 0)
+    sys.exit(os.waitstatus_to_exitcode(status) if hasattr(os, 'waitstatus_to_exitcode') else (status >> 8) & 0xff)
+
+
+if __name__ == '__main__':
+    main()

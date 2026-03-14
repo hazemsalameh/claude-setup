@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""claude-smart: Auto-fallback wrapper for Claude Code.
+
+Features:
+- Makes URLs clickable using OSC 8 hyperlinks (replaces claude-linkify)
+- Auto-switches to API key when Pro limit is hit
+- Auto-switches back to Pro when quota resets
+- Parses reset time directly from Claude's terminal output
+
+State file: ~/.config/claude-fallback/state.json
+API key:    ~/.config/claude-fallback/api_key
+"""
+import os, sys, pty, re, select, signal, struct, termios, tty, fcntl, glob, json
+from datetime import datetime, timedelta
+
+HOME          = os.path.expanduser('~')
+STATE_FILE    = f'{HOME}/.config/claude-fallback/state.json'
+API_KEY_FILE  = f'{HOME}/.config/claude-fallback/api_key'
+
+# ── URL linkification (from claude-linkify) ──────────────────────────────────
+URL_RE  = re.compile(rb'https?://[^\s\x1b\x07\x0d\x0a\]\[)(,;!?\'\"<>]+')
+# Matches a full OSC 8 hyperlink: opening escape + visible text + closing escape
+OSC8_RE = re.compile(rb'\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\).*?\x1b\]8;;(?:\x07|\x1b\\)', re.DOTALL)
+
+def linkify(data):
+    skip = [(m.start(), m.end()) for m in OSC8_RE.finditer(data)]
+    result, pos = b'', 0
+    for m in URL_RE.finditer(data):
+        if any(s <= m.start() < e for s, e in skip):
+            continue
+        url = m.group(0)
+        result += data[pos:m.start()]
+        result += b'\x1b]8;;' + url + b'\x1b\\' + url + b'\x1b]8;;\x1b\\'
+        pos = m.end()
+    return result + data[pos:]
+
+# ── Terminal size helpers ─────────────────────────────────────────────────────
+def get_winsize(fd):
+    buf = struct.pack('HHHH', 0, 0, 0, 0)
+    return struct.unpack('HHHH', fcntl.ioctl(fd, termios.TIOCGWINSZ, buf))[:2]
+
+def set_winsize(fd, rows, cols):
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+
+# ── Claude binary discovery ───────────────────────────────────────────────────
+def find_claude():
+    vdir = f'{HOME}/.local/share/claude/versions'
+    if os.path.isdir(vdir):
+        def vkey(p):
+            return [int(x) if x.isdigit() else x for x in os.path.basename(p).split('.')]
+        candidates = sorted([v for v in glob.glob(f'{vdir}/*') if os.path.isfile(v)], key=vkey)
+        if candidates:
+            return candidates[-1]
+    return None
+
+# ── State management ─────────────────────────────────────────────────────────
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {'mode': 'pro', 'reset_at': None}
+
+def save_state(state):
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f, indent=2)
+
+# ── Rate limit detection ──────────────────────────────────────────────────────
+LIMIT_KEYWORDS = [
+    b'usage limit', b'rate limit', b'limit reached',
+    b'quota exceeded', b'out of requests', b'claude.ai/upgrade',
+    b'upgrade your plan',
+]
+
+RESET_PATTERNS = [
+    re.compile(r'(?:reset[s]?|try again|available|refresh(?:es)?|renew[s]?)\s+(?:at\s+)?(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?(?:\s*[A-Za-z]{2,5})?)', re.IGNORECASE),
+    re.compile(r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))', re.IGNORECASE),
+]
+
+def parse_reset_time(text):
+    # Strip ANSI escape codes before parsing
+    clean = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', text)
+    for pat in RESET_PATTERNS:
+        m = pat.search(clean)
+        if m:
+            ts = re.sub(r'\s+', ' ', m.group(1).strip().upper())
+            for fmt in ['%I:%M %p', '%I:%M%p', '%H:%M']:
+                try:
+                    t = datetime.strptime(ts, fmt)
+                    now = datetime.now()
+                    reset = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+                    if reset <= now:
+                        reset += timedelta(days=1)
+                    return reset.isoformat()
+                except ValueError:
+                    continue
+    return None
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+def main():
+    state = load_state()
+
+    # Switch back to Pro if reset time has passed
+    if state['mode'] == 'api' and state.get('reset_at'):
+        try:
+            if datetime.now() >= datetime.fromisoformat(state['reset_at']):
+                state = {'mode': 'pro', 'reset_at': None}
+                save_state(state)
+                sys.stderr.write('\033[32m[claude-smart] Pro quota reset — back to Pro account\033[0m\n')
+                sys.stderr.flush()
+        except Exception:
+            pass
+
+    claude_path = find_claude()
+    if not claude_path:
+        sys.stderr.write('claude-smart: cannot find claude binary\n')
+        sys.exit(1)
+
+    # Build environment
+    env = os.environ.copy()
+    if state['mode'] == 'api':
+        try:
+            env['ANTHROPIC_API_KEY'] = open(API_KEY_FILE).read().strip()
+            reset_str = state.get('reset_at', 'unknown')[:16]
+            sys.stderr.write(f'\033[33m[claude-smart] Pro limit active → using API key (Pro resets {reset_str})\033[0m\n')
+            sys.stderr.flush()
+        except FileNotFoundError:
+            sys.stderr.write(f'\033[31m[claude-smart] No API key found. Add it with:\033[0m\n')
+            sys.stderr.write(f'\033[31m  echo "sk-ant-api03-..." > {API_KEY_FILE}\033[0m\n')
+            sys.exit(1)
+    else:
+        env.pop('ANTHROPIC_API_KEY', None)
+
+    stdin_fd  = sys.stdin.fileno()
+    stdout_fd = sys.stdout.fileno()
+
+    master_fd, slave_fd = pty.openpty()
+    try:
+        rows, cols = get_winsize(stdout_fd)
+        set_winsize(slave_fd, rows, cols)
+    except OSError:
+        pass
+
+    pid = os.fork()
+    if pid == 0:  # child
+        os.close(master_fd)
+        os.setsid()
+        try:
+            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+        except OSError:
+            pass
+        for fd in (0, 1, 2):
+            os.dup2(slave_fd, fd)
+        if slave_fd > 2:
+            os.close(slave_fd)
+        args = sys.argv[1:]
+        if '--dangerously-skip-permissions' not in args:
+            args = ['--dangerously-skip-permissions'] + args
+        os.execve(claude_path, [claude_path] + args, env)
+        os._exit(127)
+
+    os.close(slave_fd)
+
+    def on_sigwinch(sig, frame):
+        try:
+            rows, cols = get_winsize(stdout_fd)
+            set_winsize(master_fd, rows, cols)
+        except OSError:
+            pass
+    signal.signal(signal.SIGWINCH, on_sigwinch)
+
+    old_settings = None
+    try:
+        old_settings = termios.tcgetattr(stdin_fd)
+        tty.setraw(stdin_fd)
+    except termios.error:
+        pass
+
+    detect_buf   = b''
+    rate_detected = False
+
+    try:
+        while True:
+            try:
+                r, _, _ = select.select([master_fd, stdin_fd], [], [], 0.05)
+            except (ValueError, InterruptedError):
+                continue
+
+            if master_fd in r:
+                try:
+                    data = os.read(master_fd, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                try:
+                    os.write(stdout_fd, linkify(data))
+                except OSError:
+                    break
+
+                # Rate limit detection
+                if not rate_detected:
+                    detect_buf = (detect_buf + data)[-4000:]  # rolling 4 KB window
+                    if any(kw in detect_buf.lower() for kw in LIMIT_KEYWORDS):
+                        rt = parse_reset_time(detect_buf.decode('utf-8', errors='replace'))
+                        if rt:
+                            rate_detected = True
+                            state['mode'] = 'api'
+                            state['reset_at'] = rt
+                            save_state(state)
+                            msg = (f'\r\n\033[33m[claude-smart] Pro limit detected'
+                                   f' → will use API key on next launch'
+                                   f' (Pro resets {rt[:16]})\033[0m\r\n')
+                            os.write(stdout_fd, msg.encode())
+
+            if stdin_fd in r:
+                try:
+                    data = os.read(stdin_fd, 1024)
+                except OSError:
+                    break
+                if data:
+                    try:
+                        os.write(master_fd, data)
+                    except OSError:
+                        break
+    finally:
+        if old_settings is not None:
+            try:
+                termios.tcsetattr(stdin_fd, termios.TCSAFLUSH, old_settings)
+            except termios.error:
+                pass
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+    _, status = os.waitpid(pid, 0)
+    sys.exit(os.waitstatus_to_exitcode(status) if hasattr(os, 'waitstatus_to_exitcode') else (status >> 8) & 0xff)
+
+
+if __name__ == '__main__':
+    main()
