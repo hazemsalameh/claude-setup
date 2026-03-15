@@ -1,0 +1,14 @@
+{
+  "name": "web-terminal-server",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.0",
+    "ws": "^8.14.0",
+    "node-pty": "^1.0.0"
+  }
+}

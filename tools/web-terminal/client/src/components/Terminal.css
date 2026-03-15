@@ -1,0 +1,18 @@
+.xterm-wrap {
+  flex: 1;
+  padding: 12px 16px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.xterm-wrap .xterm {
+  height: 100%;
+}
+
+.xterm-wrap .xterm-viewport {
+  background: transparent !important;
+}
+
+.xterm-wrap .xterm-screen {
+  background: transparent !important;
+}

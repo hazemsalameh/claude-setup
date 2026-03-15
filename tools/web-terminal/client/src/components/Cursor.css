@@ -1,0 +1,32 @@
+* { cursor: none !important; }
+
+.cursor-dot {
+  position: fixed;
+  top: 0; left: 0;
+  width: 8px; height: 8px;
+  background: #a78bfa;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 99999;
+  box-shadow: 0 0 10px #a78bfa, 0 0 20px #7c3aed;
+  transition: width 0.1s, height 0.1s, background 0.1s;
+}
+.cursor-dot.click {
+  width: 4px; height: 4px;
+  background: #fff;
+}
+
+.cursor-ring {
+  position: fixed;
+  top: 0; left: 0;
+  width: 40px; height: 40px;
+  border: 1.5px solid rgba(167, 139, 250, 0.6);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 99998;
+  transition: width 0.2s, height 0.2s, border-color 0.2s;
+}
+.cursor-ring.click {
+  width: 20px; height: 20px;
+  border-color: #fff;
+}
