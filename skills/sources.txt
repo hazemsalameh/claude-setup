@@ -1,5 +1,5 @@
 # Third-party skill repos — cloned by install.sh into ~/.claude/skills/
-# Format: github_url [directory_name]
+# Format: github_url
 https://github.com/jawwadfirdousi/agent-skills
 https://github.com/avifenesh/agentsys
 https://github.com/avifenesh/agnix

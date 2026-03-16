@@ -11,7 +11,11 @@ echo "[sync] Syncing local Claude setup → repo..."
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 echo "[sync] Copying commands..."
-cp ~/.claude/commands/*.md "$REPO_DIR/commands/" 2>/dev/null || true
+# NEVER sync lead-gen-outreach.md — proprietary process, exclusive to Hazem
+for f in ~/.claude/commands/*.md; do
+    [[ "$(basename "$f")" == "lead-gen-outreach.md" ]] && continue
+    cp "$f" "$REPO_DIR/commands/"
+done
 
 # ── Custom skills (no git remote) ─────────────────────────────────────────────
 echo "[sync] Syncing custom skills..."
